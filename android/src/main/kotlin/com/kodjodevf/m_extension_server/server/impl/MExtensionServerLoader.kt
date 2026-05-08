@@ -3,18 +3,15 @@ package m_extension_server.impl
 import android.annotation.SuppressLint
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
-import dalvik.system.DexClassLoader
+import dalvik.system.PathClassLoader
 import eu.kanade.tachiyomi.animesource.AnimeSource
 import eu.kanade.tachiyomi.animesource.AnimeSourceFactory
 import eu.kanade.tachiyomi.source.Source
-import eu.kanade.tachiyomi.source.CatalogueSource
 import eu.kanade.tachiyomi.source.SourceFactory
+import eu.kanade.tachiyomi.util.system.ChildFirstPathClassLoader
 import java.io.File
-import java.io.IOException
-import java.nio.file.Files
 import java.util.Arrays
 import java.util.Base64
-import java.util.UUID
 import kotlin.jvm.optionals.toList
 import com.kodjodevf.m_extension_server.pm
 
@@ -33,7 +30,7 @@ object MExtensionServerLoader {
     )
 
     fun getSource(
-        classLoader: DexClassLoader?,
+        classLoader: ClassLoader,
         file: File,
     ): List<Any>? {
         if (pmm == null) {
@@ -64,9 +61,7 @@ object MExtensionServerLoader {
                     }
                     sourceClass
                 }.findFirst().map<List<Any>> { sourceClass->
-                    val obj: Any =
-                        Class.forName(sourceClass!!, false, classLoader).getDeclaredConstructor()
-                            .newInstance()
+                    val obj = instantiateSource(sourceClass!!, classLoader, info.applicationInfo!!.sourceDir)
                     val sources: List<Any> =
                         when (obj) {
                             is Source -> listOf(obj)
@@ -88,14 +83,27 @@ object MExtensionServerLoader {
             // Write APK data to temp file
             tempApkFile.writeBytes(apkData)
             tempApkFile.setReadOnly()
-            val loader: DexClassLoader = load(tempApkFile)
+            val loader = load(tempApkFile)
             val sources = getSource(loader,tempApkFile)
             return LoadedExtension(sources?.firstOrNull(),tempApkFile)
         
     }
 
-    private fun load(file: File): DexClassLoader {
-        return DexClassLoader(file.getAbsolutePath(), null, null, this.javaClass.getClassLoader())
+    private fun load(file: File): ClassLoader {
+        return ChildFirstPathClassLoader(file.absolutePath, null, this.javaClass.classLoader!!)
+    }
+
+    private fun instantiateSource(
+        sourceClass: String,
+        classLoader: ClassLoader,
+        sourcePath: String,
+    ): Any {
+        return try {
+            Class.forName(sourceClass, false, classLoader).getDeclaredConstructor().newInstance()
+        } catch (error: LinkageError) {
+            val fallbackClassLoader = PathClassLoader(sourcePath, null, this.javaClass.classLoader)
+            Class.forName(sourceClass, false, fallbackClassLoader).getDeclaredConstructor().newInstance()
+        }
     }
 
 }
