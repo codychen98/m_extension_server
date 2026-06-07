@@ -19,6 +19,7 @@ import m_extension_server.model.DataBody
 import m_extension_server.model.EpisodeData
 import m_extension_server.model.JAnime
 import m_extension_server.model.JFilterList
+import m_extension_server.model.JGroupFilter
 import m_extension_server.model.JManga
 import m_extension_server.model.JPage
 import m_extension_server.model.MangaData
@@ -650,7 +651,7 @@ object MihonInvoker {
 
     private fun applyAnimeGroupFilterState(
         state: Any,
-        dataGroup: JFilterList,
+        dataGroup: JGroupFilter,
     ) {
         val simpleName = state.javaClass.simpleName
         val stateValue: Any? =
@@ -721,9 +722,20 @@ object MihonInvoker {
                         val jGroup = jFilters.find { it.name == groupFilter.name }
                         if (jGroup != null) {
                             val subJFilters = jGroup.stateList
-                            for (state in groupFilter.state) {
-                                val dataGroup = subJFilters?.find { it.name == state.name } ?: continue
-                                applyAnimeGroupFilterState(state, dataGroup)
+                            for (child in groupFilter.state) {
+                                if (child == null) continue
+                                val childName =
+                                    when (child) {
+                                        is AnimeFilter<*> -> child.name
+                                        else ->
+                                            try {
+                                                child.javaClass.getDeclaredField("name").apply { isAccessible = true }.get(child) as? String
+                                            } catch (_: Exception) {
+                                                null
+                                            }
+                                    } ?: continue
+                                val dataGroup = subJFilters?.find { it.name == childName } ?: continue
+                                applyAnimeGroupFilterState(child, dataGroup)
                             }
                         }
                         filter
