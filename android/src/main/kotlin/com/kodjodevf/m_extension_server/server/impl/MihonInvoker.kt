@@ -648,6 +648,31 @@ object MihonInvoker {
         return FilterList(convertedFilters)
     }
 
+    private fun applyAnimeGroupFilterState(
+        state: Any,
+        dataGroup: JFilterList,
+    ) {
+        val simpleName = state.javaClass.simpleName
+        val stateValue: Any? =
+            when (simpleName) {
+                "CheckBox", "CheckBoxVal" -> dataGroup.stateBoolean ?: false
+                "TriState" -> dataGroup.stateInt ?: 0
+                "Select", "QueryPartFilter", "SortFilter" -> dataGroup.stateInt ?: 0
+                "Text" -> dataGroup.stateString ?: ""
+                else -> null
+            }
+        if (stateValue == null) {
+            return
+        }
+        try {
+            val field = state.javaClass.getDeclaredField("state")
+            field.isAccessible = true
+            field.set(state, stateValue)
+        } catch (_: NoSuchFieldException) {
+            // Obfuscated or unknown filter type — skip silently
+        }
+    }
+
     private fun convertAnimeFilterList(
         originalFilters: AnimeFilterList,
         jFilters: List<JFilterList>,
@@ -692,32 +717,13 @@ object MihonInvoker {
                         filter
                     }
                     is AnimeFilter.Group<*> -> {
-                        val groupFilter = filter as AnimeFilter.Group<Filter<*>>
+                        val groupFilter = filter as AnimeFilter.Group<*>
                         val jGroup = jFilters.find { it.name == groupFilter.name }
                         if (jGroup != null) {
                             val subJFilters = jGroup.stateList
                             for (state in groupFilter.state) {
-                                val jSubFilter = subJFilters?.find { it.name == state.name }
-                                val dataGroup = jSubFilter
-                                if (dataGroup == null) {
-                                    continue
-                                }
-                                if (state is AnimeFilter.CheckBox) {
-                                    val checkBox = state
-                                    checkBox.state = dataGroup.stateBoolean ?: false
-                                }
-                                if (state is AnimeFilter.TriState) {
-                                    val checkBox = state
-                                    checkBox.state = dataGroup.stateInt ?: 0
-                                }
-                                if (state is AnimeFilter.Select<*>) {
-                                    val select = state
-                                    select.state = dataGroup.stateInt ?: 0
-                                }
-                                if (state is AnimeFilter.Text) {
-                                    val text = state
-                                    text.state = dataGroup.name ?: ""
-                                }
+                                val dataGroup = subJFilters?.find { it.name == state.name } ?: continue
+                                applyAnimeGroupFilterState(state, dataGroup)
                             }
                         }
                         filter
