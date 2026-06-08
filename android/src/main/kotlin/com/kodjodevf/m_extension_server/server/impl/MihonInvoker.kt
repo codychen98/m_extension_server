@@ -659,7 +659,7 @@ object MihonInvoker {
                 "CheckBox", "CheckBoxVal" -> dataGroup.stateBoolean ?: false
                 "TriState" -> dataGroup.stateInt ?: 0
                 "Select", "QueryPartFilter", "SortFilter" -> dataGroup.stateInt ?: 0
-                "Text" -> dataGroup.stateString ?: ""
+                "Text" -> dataGroup.name ?: ""
                 else -> null
             }
         if (stateValue == null) {
