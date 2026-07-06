@@ -76,7 +76,11 @@ object MExtensionServerLoader {
         return emptyList<Any>();
     }
     @SuppressLint("SuspiciousIndentation")
-    fun loadSourceFromBase64(base64Data: String): LoadedExtension {
+    fun loadSourceFromBase64(
+        base64Data: String,
+        baseUrl: String? = null,
+        lang: String? = null,
+    ): LoadedExtension {
         val apkData = Base64.getDecoder().decode(base64Data)
         val tempApkFile = File.createTempFile("ext", ".apk")
             tempApkFile.setWritable(true)
@@ -84,9 +88,38 @@ object MExtensionServerLoader {
             tempApkFile.writeBytes(apkData)
             tempApkFile.setReadOnly()
             val loader = load(tempApkFile)
-            val sources = getSource(loader,tempApkFile)
-            return LoadedExtension(sources?.firstOrNull(),tempApkFile)
+            val sources = getSource(loader, tempApkFile) ?: emptyList()
+            return LoadedExtension(selectSource(sources, baseUrl, lang), tempApkFile)
         
+    }
+
+    private fun selectSource(
+        sources: List<Any>,
+        baseUrl: String?,
+        lang: String?,
+    ): Any? {
+        if (sources.isEmpty()) return null
+        if (!baseUrl.isNullOrBlank()) {
+            sources.firstOrNull { source ->
+                try {
+                    val url = source.javaClass.getMethod("getBaseUrl").invoke(source) as String
+                    url == baseUrl || url.trimEnd('/') == baseUrl.trimEnd('/')
+                } catch (_: Exception) {
+                    false
+                }
+            }?.let { return it }
+        }
+        if (!lang.isNullOrBlank()) {
+            sources.firstOrNull { source ->
+                try {
+                    val sourceLang = source.javaClass.getMethod("getLang").invoke(source) as String
+                    sourceLang.equals(lang, ignoreCase = true)
+                } catch (_: Exception) {
+                    false
+                }
+            }?.let { return it }
+        }
+        return sources.firstOrNull()
     }
 
     private fun load(file: File): ClassLoader {

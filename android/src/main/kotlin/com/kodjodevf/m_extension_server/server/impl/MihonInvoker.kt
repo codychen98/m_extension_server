@@ -395,7 +395,7 @@ object MihonInvoker {
         val preferenceManager: PreferenceManager? = preferenceManager
         val instance: MExtensionServerPlugin? = instance
         val screen = preferenceManager!!.createPreferenceScreen(instance!!.applicationContext!!)
-        (source as ConfigurableSource).setupPreferenceScreen(screen)
+        (source as ConfigurableAnimeSource).setupPreferenceScreen(screen)
         processPreferences(screen, preferences)
 
         return preferences

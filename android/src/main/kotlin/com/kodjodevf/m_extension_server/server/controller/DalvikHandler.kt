@@ -30,7 +30,11 @@ class DalvikHandler {
             val dataBody = objectMapper.readValue(json, DataBody::class.java)
 
             // Load extension
-            val loadedSource = MExtensionServerLoader.loadSourceFromBase64(dataBody.data)
+            val loadedSource = MExtensionServerLoader.loadSourceFromBase64(
+                dataBody.data,
+                dataBody.baseUrl,
+                dataBody.lang,
+            )
             tempApkFile = loadedSource.tempApkFile;
             // Get domain from source
             val domain =
