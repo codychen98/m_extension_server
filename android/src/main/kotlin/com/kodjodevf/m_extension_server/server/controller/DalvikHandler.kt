@@ -3,6 +3,7 @@ package com.kodjodevf.m_extension_server.server.controller
 import m_extension_server.impl.MExtensionServerLoader
 import m_extension_server.impl.MihonInvoker
 import m_extension_server.model.DataBody
+import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
 import eu.kanade.tachiyomi.network.HttpException
@@ -15,7 +16,10 @@ import java.io.File
 import java.net.URI
 
 class DalvikHandler {
-    private val objectMapper = ObjectMapper().registerModule(KotlinModule.Builder().build())
+    private val objectMapper =
+        ObjectMapper()
+            .registerModule(KotlinModule.Builder().build())
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
     fun serve(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
         var tempApkFile: File? = null
@@ -34,6 +38,7 @@ class DalvikHandler {
                 dataBody.data,
                 dataBody.baseUrl,
                 dataBody.lang,
+                dataBody.sourceId,
             )
             tempApkFile = loadedSource.tempApkFile;
             // Get domain from source

@@ -1,5 +1,8 @@
 package m_extension_server.model
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class DataBody(
     val data: String, // Base64 encoded APK data
     val method: String,
@@ -7,6 +10,7 @@ data class DataBody(
     val search: String? = null,
     val baseUrl: String? = null,
     val lang: String? = null,
+    val sourceId: String? = null,
     val filterList: List<JFilterList>? = null,
     val mangaData: MangaData? = null,
     val chapterData: ChapterData? = null,
@@ -15,6 +19,7 @@ data class DataBody(
     val preferences: MutableList<Map<String, Any>>? = null,
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class MangaData(
     val url: String?,
     val title: String?,
@@ -27,6 +32,7 @@ data class MangaData(
     val initialized: Boolean?,
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class ChapterData(
     val url: String?,
     val name: String?,
@@ -35,6 +41,7 @@ data class ChapterData(
     val scanlator: String?,
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class AnimeData(
     val url: String?,
     val title: String?,
@@ -47,6 +54,7 @@ data class AnimeData(
     val initialized: Boolean?,
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class EpisodeData(
     val url: String?,
     val name: String?,
@@ -55,6 +63,7 @@ data class EpisodeData(
     val scanlator: String?,
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class JFilterList(
     val name: String?,
     val type: String?,
@@ -64,6 +73,7 @@ data class JFilterList(
     val stateSort: JSortFilter?,
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class JGroupFilter(
     val name: String?,
     val type: String?,
@@ -71,6 +81,7 @@ data class JGroupFilter(
     val stateInt: Int?,
 )
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class JSortFilter(
     val ascending: Boolean?,
     val index: Int?,

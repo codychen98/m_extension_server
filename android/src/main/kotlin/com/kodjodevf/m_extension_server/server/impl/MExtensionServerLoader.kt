@@ -80,6 +80,7 @@ object MExtensionServerLoader {
         base64Data: String,
         baseUrl: String? = null,
         lang: String? = null,
+        sourceId: String? = null,
     ): LoadedExtension {
         val apkData = Base64.getDecoder().decode(base64Data)
         val tempApkFile = File.createTempFile("ext", ".apk")
@@ -89,7 +90,7 @@ object MExtensionServerLoader {
             tempApkFile.setReadOnly()
             val loader = load(tempApkFile)
             val sources = getSource(loader, tempApkFile) ?: emptyList()
-            return LoadedExtension(selectSource(sources, baseUrl, lang), tempApkFile)
+            return LoadedExtension(selectSource(sources, baseUrl, lang, sourceId), tempApkFile)
         
     }
 
@@ -97,8 +98,21 @@ object MExtensionServerLoader {
         sources: List<Any>,
         baseUrl: String?,
         lang: String?,
+        sourceId: String?,
     ): Any? {
         if (sources.isEmpty()) return null
+        if (!sourceId.isNullOrBlank()) {
+            sources.firstOrNull { source ->
+                try {
+                    val sId = source.javaClass.getMethod("getId").invoke(source).toString()
+                    sId == sourceId ||
+                        "mihon-$sId".hashCode().toString() == sourceId ||
+                        sId.hashCode().toString() == sourceId
+                } catch (_: Exception) {
+                    false
+                }
+            }?.let { return it }
+        }
         if (!baseUrl.isNullOrBlank()) {
             sources.firstOrNull { source ->
                 try {
