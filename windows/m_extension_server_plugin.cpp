@@ -10,6 +10,8 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace m_extension_server {
 static std::string GetStringArg(
@@ -28,6 +30,28 @@ static int GetIntArg(
   if (it == args.end()) return -1;
   const auto* val = std::get_if<int>(&it->second);
   return val ? *val : -1;
+}
+
+static std::vector<std::string> GetStringListArg(
+    const flutter::EncodableMap& args,
+    const std::string& key) {
+  std::vector<std::string> out;
+  auto it = args.find(flutter::EncodableValue(key));
+  if (it == args.end()) return out;
+  const auto* list = std::get_if<flutter::EncodableList>(&it->second);
+  if (!list) return out;
+  out.reserve(list->size());
+  for (const auto& item : *list) {
+    const auto* s = std::get_if<std::string>(&item);
+    if (s) {
+      out.push_back(*s);
+    }
+  }
+  return out;
+}
+
+static std::string QuoteArg(const std::string& arg) {
+  return "\"" + arg + "\"";
 }
 
 void MExtensionServerPlugin::RegisterWithRegistrar(
@@ -73,8 +97,10 @@ void MExtensionServerPlugin::HandleMethodCall(
       return;
     }
 
-    const std::string jvm_path      = GetStringArg(*args, "jvmPath");
-    const std::string server_jar    = GetStringArg(*args, "serverJarPath");
+    const std::string jvm_path = GetStringArg(*args, "jvmPath");
+    const std::string server_jar = GetStringArg(*args, "serverJarPath");
+    const std::vector<std::string> jvm_args =
+        GetStringListArg(*args, "jvmArgs");
 
     if (server_jar.empty()) {
       result->Error("INVALID_ARGS",
@@ -82,49 +108,158 @@ void MExtensionServerPlugin::HandleMethodCall(
       return;
     }
 
-    StartServer(port, jvm_path, server_jar, std::move(result));
+    StartServer(port, jvm_path, server_jar, jvm_args, std::move(result));
 
   } else if (method == "stopServer") {
     StopServer(std::move(result));
+
+  } else if (method == "drainServerLogs") {
+    DrainServerLogs(std::move(result));
 
   } else {
     result->NotImplemented();
   }
 }
 
-void MExtensionServerPlugin::StopRunningProcess() {
-  if (java_process_ == INVALID_HANDLE_VALUE) {
-    return;
+void MExtensionServerPlugin::AppendLogLine(std::string line) {
+  std::lock_guard<std::mutex> lock(log_mutex_);
+  while (log_lines_.size() >= kMaxLogLines) {
+    log_lines_.pop_front();
+    ++dropped_lines_;
+  }
+  log_lines_.push_back(std::move(line));
+}
+
+void MExtensionServerPlugin::LogReaderLoop() {
+  char buf[4096];
+  DWORD n = 0;
+  std::string pending;
+
+  for (;;) {
+    const HANDLE h = stdout_read_;
+    if (h == INVALID_HANDLE_VALUE || h == nullptr) {
+      break;
+    }
+    const BOOL ok = ReadFile(h, buf, sizeof(buf), &n, nullptr);
+    if (!ok || n == 0) {
+      break;
+    }
+    for (DWORD i = 0; i < n; ++i) {
+      const char c = buf[i];
+      if (c == '\n') {
+        if (!pending.empty() && pending.back() == '\r') {
+          pending.pop_back();
+        }
+        AppendLogLine(std::move(pending));
+        pending.clear();
+      } else {
+        pending.push_back(c);
+      }
+    }
   }
 
-  TerminateProcess(java_process_, 0);
-  WaitForSingleObject(java_process_, 3000);
-  CloseHandle(java_process_);
-  java_process_ = INVALID_HANDLE_VALUE;
+  if (!pending.empty()) {
+    if (pending.back() == '\r') {
+      pending.pop_back();
+    }
+    AppendLogLine(std::move(pending));
+  }
+}
+
+void MExtensionServerPlugin::DrainServerLogs(
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  std::deque<std::string> drained;
+  size_t dropped = 0;
+  {
+    std::lock_guard<std::mutex> lock(log_mutex_);
+    drained.swap(log_lines_);
+    dropped = dropped_lines_;
+    dropped_lines_ = 0;
+  }
+
+  flutter::EncodableList list;
+  if (dropped > 0) {
+    std::ostringstream msg;
+    msg << "[m_extension_server] dropped " << dropped << " lines";
+    list.push_back(flutter::EncodableValue(msg.str()));
+  }
+  for (auto& line : drained) {
+    list.push_back(flutter::EncodableValue(std::move(line)));
+  }
+  result->Success(flutter::EncodableValue(list));
+}
+
+void MExtensionServerPlugin::StopRunningProcess() {
+  if (java_process_ != INVALID_HANDLE_VALUE) {
+    TerminateProcess(java_process_, 0);
+    WaitForSingleObject(java_process_, 5000);
+    CloseHandle(java_process_);
+    java_process_ = INVALID_HANDLE_VALUE;
+  }
+
+  if (stdout_read_ != INVALID_HANDLE_VALUE && stdout_read_ != nullptr) {
+    CloseHandle(stdout_read_);
+    stdout_read_ = INVALID_HANDLE_VALUE;
+  }
+
+  if (log_reader_.joinable()) {
+    log_reader_.join();
+  }
 }
 
 void MExtensionServerPlugin::StartServer(
     int port,
     const std::string& jvm_path,
     const std::string& server_jar_path,
+    const std::vector<std::string>& jvm_args,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   StopRunningProcess();
 
   const std::string java_exe = jvm_path.empty() ? "java" : jvm_path;
 
   std::ostringstream cmd;
-  cmd << "\"" << java_exe << "\""
-      << " -jar \"" << server_jar_path << "\""
-      << " " << port;
+  cmd << QuoteArg(java_exe);
+  for (const auto& arg : jvm_args) {
+    cmd << " " << QuoteArg(arg);
+  }
+  cmd << " -jar " << QuoteArg(server_jar_path) << " " << port;
 
   std::string cmd_str = cmd.str();
   std::vector<char> cmd_buf(cmd_str.begin(), cmd_str.end());
   cmd_buf.push_back('\0');
 
+  SECURITY_ATTRIBUTES sa = {};
+  sa.nLength = sizeof(sa);
+  sa.bInheritHandle = TRUE;
+  sa.lpSecurityDescriptor = nullptr;
+
+  HANDLE stdout_write = nullptr;
+  HANDLE stdout_read = nullptr;
+  if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) {
+    const DWORD err = GetLastError();
+    std::ostringstream msg;
+    msg << "CreatePipe failed (error " << err << ")";
+    result->Error("START_ERROR", msg.str());
+    return;
+  }
+
+  if (!SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0)) {
+    const DWORD err = GetLastError();
+    CloseHandle(stdout_read);
+    CloseHandle(stdout_write);
+    std::ostringstream msg;
+    msg << "SetHandleInformation failed (error " << err << ")";
+    result->Error("START_ERROR", msg.str());
+    return;
+  }
+
   STARTUPINFOA si = {};
   si.cb = sizeof(si);
-  si.dwFlags = STARTF_USESHOWWINDOW;
+  si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
   si.wShowWindow = SW_HIDE;
+  si.hStdOutput = stdout_write;
+  si.hStdError = stdout_write;
+  si.hStdInput = nullptr;
 
   PROCESS_INFORMATION pi = {};
 
@@ -133,15 +268,19 @@ void MExtensionServerPlugin::StartServer(
       /*lpCommandLine=*/cmd_buf.data(),
       /*lpProcessAttributes=*/nullptr,
       /*lpThreadAttributes=*/nullptr,
-      /*bInheritHandles=*/FALSE,
+      /*bInheritHandles=*/TRUE,
       /*dwCreationFlags=*/CREATE_NO_WINDOW,
       /*lpEnvironment=*/nullptr,
       /*lpCurrentDirectory=*/nullptr,
       &si,
       &pi);
 
+  // Parent must close the write end so ReadFile sees EOF when the child exits.
+  CloseHandle(stdout_write);
+
   if (!ok) {
     const DWORD err = GetLastError();
+    CloseHandle(stdout_read);
     std::ostringstream msg;
     msg << "CreateProcess failed (error " << err << "): " << cmd_str;
     result->Error("START_ERROR", msg.str());
@@ -150,6 +289,8 @@ void MExtensionServerPlugin::StartServer(
 
   CloseHandle(pi.hThread);
   java_process_ = pi.hProcess;
+  stdout_read_ = stdout_read;
+  log_reader_ = std::thread([this]() { LogReaderLoop(); });
 
   std::ostringstream ok_msg;
   ok_msg << "Server started on port " << port;
@@ -163,11 +304,7 @@ void MExtensionServerPlugin::StopServer(
     return;
   }
 
-  TerminateProcess(java_process_, 0);
-  WaitForSingleObject(java_process_, 5000);
-  CloseHandle(java_process_);
-  java_process_ = INVALID_HANDLE_VALUE;
-
+  StopRunningProcess();
   result->Success(flutter::EncodableValue("Server stopped"));
 }
 

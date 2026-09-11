@@ -6,7 +6,12 @@
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
 
+#include <deque>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 namespace m_extension_server {
 
@@ -25,14 +30,26 @@ class MExtensionServerPlugin : public flutter::Plugin {
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
  private:
+  static constexpr size_t kMaxLogLines = 2000;
+
   HANDLE java_process_ = INVALID_HANDLE_VALUE;
+  HANDLE stdout_read_ = INVALID_HANDLE_VALUE;
+  std::thread log_reader_;
+  std::mutex log_mutex_;
+  std::deque<std::string> log_lines_;
+  size_t dropped_lines_ = 0;
 
   void StopRunningProcess();
+  void AppendLogLine(std::string line);
+  void LogReaderLoop();
+  void DrainServerLogs(
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
   void StartServer(
       int port,
       const std::string& jvm_path,
       const std::string& server_jar_path,
+      const std::vector<std::string>& jvm_args,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
   void StopServer(

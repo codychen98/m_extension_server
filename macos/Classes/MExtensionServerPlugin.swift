@@ -3,6 +3,8 @@ import FlutterMacOS
 
 public class MExtensionServerPlugin: NSObject, FlutterPlugin {
 
+    private static let maxLogLines = 2000
+
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(
             name: "m_extension_server",
@@ -12,6 +14,11 @@ public class MExtensionServerPlugin: NSObject, FlutterPlugin {
     }
 
     private var javaProcess: Process?
+    private var outputPipe: Pipe?
+    private let logLock = NSLock()
+    private var logLines: [String] = []
+    private var droppedLines = 0
+    private var pendingLine = ""
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
@@ -33,13 +40,18 @@ public class MExtensionServerPlugin: NSObject, FlutterPlugin {
                 return
             }
             let jvmPath = args["jvmPath"] as? String
+            let jvmArgs = args["jvmArgs"] as? [String] ?? []
             startServer(port: port,
                 jvmPath: jvmPath,
                 serverJarPath: serverJarPath,
+                jvmArgs: jvmArgs,
                 result: result)
 
         case "stopServer":
             stopServer(result: result)
+
+        case "drainServerLogs":
+            drainServerLogs(result: result)
 
         default:
             result(FlutterMethodNotImplemented)
@@ -49,6 +61,7 @@ public class MExtensionServerPlugin: NSObject, FlutterPlugin {
     private func startServer(port: Int,
     jvmPath: String?,
     serverJarPath: String,
+    jvmArgs: [String],
     result: @escaping FlutterResult) {
         terminateJavaProcess()
 
@@ -66,7 +79,8 @@ public class MExtensionServerPlugin: NSObject, FlutterPlugin {
 
         let process = configuredProcess(javaExe: javaExe,
             serverJarPath: serverJarPath,
-            port: port)
+            port: port,
+            jvmArgs: jvmArgs)
         print("m_extension_server: launching Java from \(javaExe)")
 
         do {
@@ -74,6 +88,7 @@ public class MExtensionServerPlugin: NSObject, FlutterPlugin {
             javaProcess = process
             result("Server started on port \(port)")
         } catch {
+            clearOutputPipe()
             let detailedError = buildLaunchErrorMessage(error, javaExe: javaExe)
             print("m_extension_server: launch failed for \(javaExe): \(detailedError)")
             result(FlutterError(
@@ -85,6 +100,7 @@ public class MExtensionServerPlugin: NSObject, FlutterPlugin {
 
     private func stopServer(result: @escaping FlutterResult) {
         guard let process = javaProcess, process.isRunning else {
+            clearOutputPipe()
             javaProcess = nil
             result("Server was not running")
             return
@@ -93,6 +109,7 @@ public class MExtensionServerPlugin: NSObject, FlutterPlugin {
         process.terminate()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             process.waitUntilExit()
+            self?.clearOutputPipe()
             self?.javaProcess = nil
             DispatchQueue.main.async {
                 result("Server stopped")
@@ -100,13 +117,74 @@ public class MExtensionServerPlugin: NSObject, FlutterPlugin {
         }
     }
 
+    private func drainServerLogs(result: @escaping FlutterResult) {
+        logLock.lock()
+        let drained = logLines
+        let dropped = droppedLines
+        logLines = []
+        droppedLines = 0
+        logLock.unlock()
+
+        var out: [String] = []
+        if dropped > 0 {
+            out.append("[m_extension_server] dropped \(dropped) lines")
+        }
+        out.append(contentsOf: drained)
+        result(out)
+    }
+
+    private func appendLogChunk(_ chunk: String) {
+        logLock.lock()
+        defer { logLock.unlock() }
+
+        pendingLine += chunk
+        while let range = pendingLine.range(of: "\n") {
+            var line = String(pendingLine[..<range.lowerBound])
+            pendingLine = String(pendingLine[range.upperBound...])
+            if line.hasSuffix("\r") {
+                line = String(line.dropLast())
+            }
+            while logLines.count >= Self.maxLogLines {
+                logLines.removeFirst()
+                droppedLines += 1
+            }
+            logLines.append(line)
+        }
+    }
+
+    private func flushPendingLogLine() {
+        logLock.lock()
+        defer { logLock.unlock() }
+        guard !pendingLine.isEmpty else { return }
+        var line = pendingLine
+        pendingLine = ""
+        if line.hasSuffix("\r") {
+            line = String(line.dropLast())
+        }
+        while logLines.count >= Self.maxLogLines {
+            logLines.removeFirst()
+            droppedLines += 1
+        }
+        logLines.append(line)
+    }
+
+    private func clearOutputPipe() {
+        if let handle = outputPipe?.fileHandleForReading {
+            handle.readabilityHandler = nil
+        }
+        outputPipe = nil
+        flushPendingLogLine()
+    }
+
     private func terminateJavaProcess() {
         guard let process = javaProcess, process.isRunning else {
+            clearOutputPipe()
             javaProcess = nil
             return
         }
         process.terminate()
         process.waitUntilExit()
+        clearOutputPipe()
         javaProcess = nil
     }
 
@@ -116,12 +194,26 @@ public class MExtensionServerPlugin: NSObject, FlutterPlugin {
 
     private func configuredProcess(javaExe: String,
     serverJarPath: String,
-    port: Int) -> Process {
+    port: Int,
+    jvmArgs: [String]) -> Process {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: javaExe)
-        process.arguments = ["-jar", serverJarPath, String(port)]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        process.arguments = jvmArgs + ["-jar", serverJarPath, String(port)]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                self?.flushPendingLogLine()
+                return
+            }
+            let text = String(decoding: data, as: UTF8.self)
+            self?.appendLogChunk(text)
+        }
+        outputPipe = pipe
         return process
     }
 

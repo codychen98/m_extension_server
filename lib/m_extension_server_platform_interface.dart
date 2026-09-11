@@ -36,15 +36,31 @@ abstract class MExtensionServerPlatform extends PlatformInterface {
   ///                     `PATH` (or `JAVA_HOME` on macOS).
   /// * [serverJarPath] – absolute path to the fat-JAR that implements the
   ///                     extension server. Required on these platforms.
+  /// * [jvmArgs]       – optional JVM flags inserted between the executable
+  ///                     and `-jar` (e.g. `-D…=true`). Ignored on Android.
   Future<String?> startServer(
     int port, {
     String? jvmPath,
     String? serverJarPath,
+    List<String>? jvmArgs,
   }) {
     throw UnimplementedError('startServer() has not been implemented.');
   }
 
   Future<String?> stopServer() {
     throw UnimplementedError('stopServer() has not been implemented.');
+  }
+
+  /// Returns and clears buffered server stdout/stderr lines.
+  ///
+  /// Lines are raw process output (newest last). The native ring buffer caps
+  /// at 2000 lines; when truncation happens, the drained batch is prepended
+  /// with one synthetic line
+  /// `[m_extension_server] dropped N lines`.
+  ///
+  /// Desktop platforms implement this; the default returns an empty list
+  /// (Android / unimplemented hosts).
+  Future<List<String>> drainServerLogs() async {
+    return const <String>[];
   }
 }
