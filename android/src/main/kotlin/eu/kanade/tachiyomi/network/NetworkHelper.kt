@@ -3,6 +3,7 @@ package eu.kanade.tachiyomi.network
 import android.content.Context
 import eu.kanade.tachiyomi.network.interceptor.CloudflareInterceptor
 import eu.kanade.tachiyomi.network.interceptor.IgnoreGzipInterceptor
+import eu.kanade.tachiyomi.network.interceptor.MegaplaySourcesInterceptor
 import okhttp3.Cache
 import okhttp3.OkHttpClient
 import okhttp3.brotli.BrotliInterceptor
@@ -20,6 +21,7 @@ class NetworkHelper(
             OkHttpClient
                 .Builder()
                 .cookieJar(cookieJar)
+                .addInterceptor(MegaplaySourcesInterceptor())
                 .addInterceptor(HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BODY))
                 .addNetworkInterceptor(IgnoreGzipInterceptor())
                 .addNetworkInterceptor(BrotliInterceptor)
